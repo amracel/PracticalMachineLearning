@@ -1,0 +1,213 @@
+---
+title: 'Project: Practical Machine Learning'
+author: "Anne Racel"
+date: "April 18, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Summary
+
+The dataset provided with workout data. The purpose of this study is to use this data to predict what type of activity (classe) the participant is engaging in. There are 159 independent variables and one dependent variable provided. A quick 'eyeballing' of the data, however, shows many columns where the values are 'NA'. It will be determined how important those values are to the predictive model and how they should be handled.
+
+This is a classification problem, and we will try applying 3 or 4 different algorithms to the problem, in order to find the best solution. We will also try combining the results of the predictions to see if that assists us in improving the predictive possibilities.
+
+Notes: I tried using median values to replace the 'NAs' in a number of columns. This was abandoned after the results proved to be poor. Those efforts have been removed from this writeup in order to stay within the limits given within the directions for this project.
+
+```{r load}
+exTrain <- read.csv('/home/anne/Downloads/pml-training.csv')
+exTest <- read.csv('/home/anne/Downloads/pml-testing.csv')
+
+head(exTrain)
+```
+
+There are 100 columns with mostly 'NAs' or '#DIV/0', rather than acutal values. As mentioned above, I did try removing the 'DIV/0' and change the 'NAs' to the median values of the column. But the analysis results were poor, so, instead, I'm removing these columns:
+
+```{r filter}
+
+exParedTrain <- exTrain[,c(1:11,37:49,60:68,84:86,102, 113:124,140,151:160)]
+
+# Note: I found by looking at the data in a spreadsheet, that the 
+exParedTest <- exTest[c(1:11,37:49,60:68,84:86,102, 113:124,140,151:160)]
+```
+
+The provided test set does not include the categorization (classe) values. So we'll divide up the training dataset to allow us to have a 'test' set to use for evaluating our models.
+
+```{r splitData}
+
+library(caTools)
+set.seed(1234)
+split <- sample.split(exParedTrain$classe, SplitRatio = 0.80)
+exSplitTrain <- subset(exParedTrain, split == TRUE)
+exSplitTest <- subset(exParedTrain, split == FALSE)
+
+```
+
+Other values that will be needed for most, if not all, the models:
+
+```{r setTrainParams, echo = FALSE}
+library(caret)
+library(e1071)
+repeats = 3
+numbers = 10
+tunel = 10
+
+set.seed(1234)
+
+trainValues = trainControl(method = "repeatedcv",
+                 number = numbers,
+                 repeats = repeats,
+                 classProbs = FALSE)
+
+```
+## Visualizations of data
+
+Let's do some discovery on our data with a heatmap.
+
+```{r heatmap}
+
+library(reshape2)
+library(ggplot2)
+library(plyr)
+library(scales)
+
+exTrain.m <- melt(exParedTrain)
+exTrain.m <- ddply(exTrain.m, .(variable), transform, rescale = rescale(value))
+p <- ggplot(exTrain.m, aes(classe, variable))
+p = p + geom_tile(aes(fill = rescale), colour = "white")
+p <- p + scale_fill_gradient(low = "white", high = "steelblue")
+p
+
+```
+
+Note: I'm following the examples in the help for the heatmap. I have tried modifying the arguments but have not been able to get rid of the error messages. However, the final product looks to be correct.
+
+The following shows 'total' values for all the major categories. Since it would be difficult to review all the values for each
+class, these boxplots of the 'totals' vs. class does give us some information as to where divisions may lie.
+
+```{r boxplots}
+par(mfrow = c(2,2), mar = c(5,4,2,1))
+boxplot(total_accel_belt ~ classe, exParedTrain, xlab = 'Class', ylab = 'Total Belt Acceleration', col = "blue")
+boxplot(total_accel_arm ~ classe, exParedTrain, xlab = 'Class', ylab = 'Total Arm Acceleration', col = "blue")
+boxplot(total_accel_dumbbell ~ classe, exParedTrain, xlab = 'Class', ylab = 'Total Dumbbell Acceleration', col = "blue")
+boxplot(total_accel_forearm ~ classe, exParedTrain, xlab = 'Class', ylab = 'Total Forearm Acceleration', col = "blue")
+```
+
+The Total Arm Acceleration shows few differences between the different classes, although there are fewer outliers for A than the other classes. The Total Belt Acceleration shows the widest variety. And there is a great difference in the median between A and the others. The Dumbell medians are more widely spaced than the other readings, although they are still close.
+
+## Machine Learning
+
+### K-Means Clustering
+
+```{r kmeans}
+
+set.seed(1234)
+kmFit <- kmeans(exSplitTrain[,7:59], 5, nstart = 20)
+
+table(kmFit$cluster, exSplitTrain$classe)
+
+```
+
+K Means Clustering is very ineffective, it seems. Or at least with the hyperparameters I've selected.
+
+### Support Vector Machine
+
+```{r SVM}
+library(e1071)
+
+svmModel <- svm(formula = classe ~ .,
+                data = exSplitTrain,
+                type = 'C-classification',
+                kernel = 'polynomial')
+
+SvmPred = predict(svmModel, newdata = exSplitTest)
+table(exSplitTest$classe, SvmPred)
+```
+
+### K-NN
+
+```{r knn}
+library(caret)
+Sys.time()
+knnModel <- train(classe ~ ., data = exSplitTrain, method = "knn",
+                  preProcess = c("center", "scale"),
+                  trControl = trainValues,
+                  metric = "Accuracy",
+                  tuneLength = tunel)
+Sys.time()
+knnModel
+```
+
+Predicting values with the K-NN model:
+
+```{r predictKnn}
+knnPredict <- predict(knnModel, exSplitTest)
+table(exSplitTest$classe, knnPredict)
+```
+
+### Random Forest
+
+```{r randomForest}
+library(caret)
+Sys.time()
+
+rfFit <- train(classe ~ ., 
+                data = exSplitTrain, 
+                method = "rf", 
+                prox = TRUE, 
+                preProcess = c("center","scale"),
+                trControl = trainValues)
+Sys.time()
+rfFit
+```
+
+### Random Forest Prediction:
+
+
+```{r predictRF}
+
+rfPred <- predict(rfFit, exSplitTest)
+table(rfPred,exSplitTest$classe)
+
+```
+
+Random Forest took quite awhile (4-5 hrs) to run. But the results were perfect for the test set. Therefore, this is the model I will be using for the test set.
+
+## Comparing Results from Different Algorithms
+
+```{r finalCompare}
+ 
+tmpKnn <- exSplitTest$classe == knnPredict
+tmpSVM <- SvmPred == exSplitTest$classe
+tmpRf <- rfPred == exSplitTest$classe
+
+print('K-NN')
+sum(tmpKnn == TRUE)/length(exSplitTest$classe) * 100
+
+print('SVM')
+sum(tmpSVM == TRUE)/length(exSplitTest$classe) * 100
+
+print('RF')
+sum(tmpRf == TRUE)/length(exSplitTest$classe) * 100
+
+counts <- c(length(exSplitTest$classe)/1000, sum(tmpKnn == TRUE)/1000, sum(tmpSVM == TRUE)/1000, sum(tmpRf == TRUE)/1000)
+
+par(las=2)
+par(mar=c(5,8,4,2))
+barplot(counts, 
+        main = "Algorithm Comparisons", 
+        xlab = "# Correct in thousands", 
+        horiz = TRUE, 
+        names.arg=c("True Values",'KNN','SVM','RF'),
+        col=c('darkblue','red','green','steelblue'))
+
+```
+
+## Summary 
+
+The training data was divided into 'test' and 'train', since the test data provided did not include the classification. 4 algorithms were tested on the data. KMeans clustering did so poorly on the training data that it wasn't even tried on the test data. K-NN and SVM did fairly well: 97.83% and 96.84% respectively. Random Forest, although it took 6 hours to run, was the most successful, getting 100% of the test samples correct.
+
+
